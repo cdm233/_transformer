@@ -6,13 +6,71 @@ from datasets import load_dataset
 import os
 from src.utils import load_config
 from collections import defaultdict
+import random
+import requests
+
+
+def auto_dataset_downloader(name, base_url):
+    if not os.path.exists(f"./data/{name}"):
+        os.mkdir(f"./data/{name}")
+
+    file_id = 0
+
+    while True:
+        target_file_url = f"{'/'.join(base_url.split('/')[:-1])}/{file_id:04d}.parquet"
+        print("Trying to download", target_file_url)
+
+        if requests.head(target_file_url).status_code != 404:
+            print("File exists")
+            os.system(f'wget -P ./data/{name} {target_file_url}')
+            file_id += 1
+        else:
+            print("File doesn't exist, stopping...")
+            break
 
 
 def train_tokenizer():
     _, model_config = load_config("./config.json")
-    spm.SentencePieceTrainer.Train(input=[f"./data/{file}" for file in os.listdir("./data") if file.endswith('.txt') and "code" in file],
+    
+    file_list = [f"./data/{file}" for file in os.listdir("./data") if file.endswith('.txt')]
+    random.shuffle(file_list)
+    file_list = file_list[:1000]
+
+    spm_options = dict(
+        input_format="text",
+        # BPE alg
+        model_type="bpe",
+        # normalization
+        normalization_rule_name="identity", # ew, turn off normalization
+        remove_extra_whitespaces=False,
+        max_sentence_length=4192, # max number of bytes per sentence
+        seed_sentencepiece_size=1000000,
+        shuffle_input_sentence=True,
+        # rare word treatment
+        character_coverage=0.99995,
+        byte_fallback=True,
+        # merge rules
+        split_digits=True,
+        split_by_unicode_script=True,
+        split_by_whitespace=True,
+        split_by_number=True,
+        max_sentencepiece_length=16,
+        add_dummy_prefix=True,
+        allow_whitespace_only_pieces=True,
+        # special tokens
+        unk_id=0, # the UNK token MUST exist
+        bos_id=1, # the others are optional, set to -1 to turn off
+        eos_id=2,
+        pad_id=-1,
+        # systems
+        num_threads=os.cpu_count(), # use ~all system resources
+    )
+
+    spm.SentencePieceTrainer.Train(input=file_list,
                                    model_prefix='./tokenizer/tokenizer', vocab_size=model_config["vocab_size"],
-                                   user_defined_symbols=["<s>", "</s>", "<n>", "<pad>"])
+                                   input_sentence_size=300000,
+                                   user_defined_symbols=["<s>", "</s>", "<pad>"],
+                                   **spm_options)
     sp = spm.SentencePieceProcessor()
     sp.Load('./tokenizer/tokenizer.model')
 
@@ -21,7 +79,8 @@ import numpy as np
 import torch.nn as nn
 
 class MLP(nn.Module):
-"""
+    def __init__(self):
+        self.a = 1"""
     print(sp.Encode(target))
     print(sp.Decode(sp.Encode(target)))
 
@@ -48,12 +107,11 @@ def preprocess_line(line: str):
 
 
 def process_book_corpus():
-    max_lines_per_file = 100_000
+    _, model_config = load_config("./config.json")
 
-    # with open("./data/tinyshakespeare.txt", "r+") as shakespeare:
-    #     text = shakespeare.read()
-    #     if not text.startswith("<s>"):
-    #         shakespeare.write("<s>" + text.replace("\n\n", "</s>\n\n<s>") + "</s>")
+    block_size = model_config['block_size']
+
+    max_lines_per_file = 100_000
 
     file_id = 0
 
@@ -68,8 +126,13 @@ def process_book_corpus():
             with open(result_file_path, "w+") as f:
                 file_total["bookcorpus"] += 1
 
+                line_to_write = ""
                 for line in line_cluster:
-                    f.write(f'<s>{preprocess_line(line)}</s>')
+                    if len(line_to_write) < block_size * 2:
+                        line_to_write = line_to_write + " " + preprocess_line(line)
+                    else:
+                        f.write(f'<s>{line_to_write}</s>\n')
+                        line_to_write = ""
 
             file_id += 1
 
@@ -84,6 +147,11 @@ def tokenize_data():
 
     file_counter = defaultdict(lambda: 0)
     count_file_total()
+
+    print('file_total', file_total)
+
+    if not os.path.exists('./data/tokenized/'):
+        os.mkdir('./data/tokenized/')
 
     if not os.path.exists('./data/tokenized/val/'):
         os.mkdir('./data/tokenized/val/')
@@ -105,15 +173,41 @@ def tokenize_data():
                 with open(f"./data/tokenized/train/{file.split('.')[0]}_tokenized.p", "wb") as f:
                     pickle.dump(tokenized, f)
 
+            del tokenized
+
 
 def clean_up():
     file_list = []
     for file_name in os.listdir("./data"):
-        if file_name.endswith(".txt") and ("bookcorpus" in file_name or "code_" in file_name):
+        if file_name.endswith(".txt"):
             file_list.append(file_name)
 
     for file in file_list:
         os.remove(f"./data/{file}")
+
+
+def process_oscar():
+    file_id = 0
+    max_lines_per_file = 2_000
+
+    for file_name in os.listdir("./data/oscar"):
+        if 'parquet' not in file_name:
+            continue
+
+        data = load_dataset('parquet', data_files=f'./data/oscar/{file_name}', trust_remote_code=True)["train"]
+
+        rearranged = [data[i:i + max_lines_per_file] for i in range(0, len(data), max_lines_per_file)]
+
+        for line_cluster in tqdm(rearranged, desc=f"Processing {file_name}", unit="cluster"):
+            result_file_path = f"./data/oscar_{file_id:04d}_plain.txt"
+
+            with open(result_file_path, "w+", encoding="utf-8") as f:
+                file_total["oscar"] += 1
+
+                for line in line_cluster['text']:
+                    f.write(f"<s>{line}</s>\n")
+
+            file_id += 1
 
 
 def process_c4():
@@ -135,8 +229,7 @@ def process_c4():
                 file_total["c4"] += 1
 
                 for line in line_cluster['text']:
-                    new_line_replaced = line.replace('\n', '<n>')
-                    f.write(f"<s>{new_line_replaced}</s>\n")
+                    f.write(f"<s>{line}</s>\n")
 
             file_id += 1
 
@@ -164,7 +257,6 @@ def process_code_corpus():
 
                 for idx in range(len(repository_name)):
                     cur_whole_func_string = whole_func_string[idx]
-                    cur_whole_func_string = cur_whole_func_string.replace('\n', '<n>')
 
                     f.write(f'<s>{cur_whole_func_string}</s>\n')
 
@@ -178,10 +270,57 @@ def count_file_total():
             file_total[file.split("_")[0]] += 1
 
 
+def process_web_text():
+    max_lines_per_file = 4_000
+
+    file_id = 0
+
+    for file_name in os.listdir("./data/webtext"):
+        data = load_dataset('parquet', data_files=f'./data/webtext/{file_name}', trust_remote_code=True)["train"]["text"]
+
+        rearranged = [data[i:i + max_lines_per_file] for i in range(0, len(data), max_lines_per_file)]
+
+        for line_cluster in tqdm(rearranged, desc=f"Processing {file_name}", unit="cluster"):
+            result_file_path = f"./data/webtext_{file_id:04d}_plain.txt"
+
+            with open(result_file_path, "w+") as f:
+                file_total["webtext"] += 1
+
+                for line in line_cluster:
+                    f.write(f'<s>{line}</s>\n')
+
+            file_id += 1
+
+
+def process_text_books():
+    max_lines_per_file = 4_000
+
+    file_id = 0
+
+    for file_name in os.listdir("./data/textbooks"):
+        data = load_dataset('parquet', data_files=f'./data/textbooks/{file_name}', trust_remote_code=True)["train"]["text"]
+
+        rearranged = [data[i:i + max_lines_per_file] for i in range(0, len(data), max_lines_per_file)]
+
+        for line_cluster in tqdm(rearranged, desc=f"Processing {file_name}", unit="cluster"):
+            result_file_path = f"./data/textbooks_{file_id:04d}_plain.txt"
+
+            with open(result_file_path, "w+") as f:
+                file_total["textbooks"] += 1
+
+                for line in line_cluster:
+                    f.write(f'<s>{line}</s>\n')
+
+            file_id += 1
+
+
 def preprocessing():
+    # process_oscar()
+    # process_text_books()
     # process_c4()
     # process_code_corpus()
     # process_book_corpus()
+    # process_web_text()
     # train_tokenizer()
     tokenize_data()
 
@@ -191,3 +330,4 @@ def preprocessing():
 if __name__ == "__main__":
     file_total = defaultdict(lambda: 0)
     preprocessing()
+    # auto_dataset_downloader('oscar', r'https://huggingface.co/datasets/oscar/resolve/refs%2Fconvert%2Fparquet/unshuffled_deduplicated_en/partial-train/0000.parquet')

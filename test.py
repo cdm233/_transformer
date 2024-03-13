@@ -68,13 +68,19 @@ class BaseDataLoader:
 
 
 if __name__ == "__main__":
-    args = list(sys.argv[1:])
-    args_pair = [args[i:i + 2] for i in range(0, len(args), 2)]
-
-    print(args_pair)
+    sp = spm.SentencePieceProcessor()
+    sp.Load('./tokenizer/tokenizer.model')
 
     dataloader = StreamDataLoader()
-    print(dataloader.train_files[:5])
+    # print(dataloader.train_files[:5])
+    import os
+
+    size = os.path.getsize(f"./data/tokenized/train/{dataloader.train_files[dataloader.cur_train_file_id]}")
+
+    total_len = len(dataloader.train_data)
+    print(size/1e6,"M")
+
+    print(total_len/1e6, "M Tokens")
 
     # data = dataloader.get_batch(1, 256)
 

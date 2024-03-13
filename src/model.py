@@ -158,25 +158,24 @@ class AttentionBlock(nn.Module):
     def forward(self, x):
         x = x + self.MHA(self.layer_norm1(x))
 
-        if self.FF_out_n_embd is not None and x.shape[-1] == self.FF_out_n_embd:
-            x = x + self.FF(self.layer_norm2(x))
-        else:
-            x = self.FF(self.layer_norm2(x))
+        x = x + self.FF(self.layer_norm2(x))
 
         return x
 
-
+    
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
+        
         pe = pe.unsqueeze(0).transpose(0, 1)
         self.register_buffer('pe', pe)
-
+        
     def forward(self, x):
         return x + self.pe[:x.size(0), :]
 
@@ -225,12 +224,10 @@ class TransformerNet(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model=embedding_arch["embed_dim"], max_len=block_size)
 
         # self.token_embedding = nn.Embedding(vocab_size, embedding_arch["embed_dim"])
-        # self.position_embedding = nn.Embedding(block_size, embedding_arch["embed_dim"])
         self.token_embedding = bnb.nn.StableEmbedding(vocab_size, embedding_arch["embed_dim"])
-        self.position_embedding = bnb.nn.StableEmbedding(block_size, embedding_arch["embed_dim"])
         self.lm_head = nn.Sequential()
 
-        last_lm_layer = block_arch[-1]["embed_dim"]
+        last_lm_layer = block_arch["out_embed_dim"]
         for lm_layer_arch in lm_head_arch:
             self.lm_head.append(nn.Linear(last_lm_layer, lm_layer_arch))
             # self.lm_head.append(SwiGLU())
@@ -242,23 +239,20 @@ class TransformerNet(nn.Module):
 
         self.attention_blocks = nn.ModuleList()
 
-        for arch in block_arch:
-            self.attention_blocks.append(nn.ModuleList())
+        cur_rep = block_arch["num_rep"]
+        cur_num_heads = block_arch["num_heads"]
+        cur_embed_dim = block_arch["embed_dim"]
 
-            cur_rep = arch["num_rep"]
-            cur_num_heads = arch["num_heads"]
-            cur_embed_dim = arch["embed_dim"]
+        for i in range(cur_rep):
+            if i == cur_rep - 1:
+                FF_out_n_embd = block_arch.get("out_embed_dim", None)
+            else:
+                FF_out_n_embd = None
 
-            for i in range(cur_rep):
-                if i == cur_rep - 1:
-                    FF_out_n_embd = arch.get("out_embed_dim", None)
-                else:
-                    FF_out_n_embd = None
-
-                self.attention_blocks[-1].append(AttentionBlock(cur_embed_dim, cur_num_heads, ff_out_n_embd=FF_out_n_embd))
+            self.attention_blocks.append(AttentionBlock(cur_embed_dim, cur_num_heads, ff_out_n_embd=FF_out_n_embd))
 
         # self.layer_norm = nn.LayerNorm(block_arch[-1]["out_embed_dim"])
-        self.layer_norm = RMSNorm(block_arch[-1]["out_embed_dim"])
+        self.layer_norm = RMSNorm(block_arch["out_embed_dim"])
 
         parent_dir = f"model_v{self.model_version}"
         full_path = f"./models/{parent_dir}"
@@ -268,23 +262,43 @@ class TransformerNet(nn.Module):
 
         shutil.copyfile("./config.json", f"{full_path}/config.json")       
 
+    def convert_model_to_fp16(model):
+        # Convert the entire model to fp16
+        model.half()
+        
+        # Convert specific layers back to fp32
+        for name, module in model.named_modules():
+            if isinstance(module, (torch.nn.Embedding, torch.nn.LayerNorm)):
+                module.float()
+
+    def convert_model(self, load_mode):
+        self.load_mode = load_mode
+
+        if load_mode == 'bfp16':
+            load_dtype = torch.bfloat16
+        elif load_mode == 'fp16':
+            load_dtype = torch.float16
+        else:
+            load_dtype = torch.float16
+            
+        # Convert the entire model to fp16
+        self = self.to(load_dtype)
+        
+        # Convert specific layers back to fp32
+        for name, module in self.named_modules():
+            if isinstance(module, (torch.nn.Embedding, torch.nn.LayerNorm)):
+                module.float()
+
+        self.load_dtype = load_dtype
+
     def forward(self, inputs, targets=None):
         tok_emb = self.token_embedding(inputs) * math.sqrt(self.emb_dim)
-        pos_emb = self.pos_encoder(tok_emb)
+        x = self.pos_encoder(tok_emb)
 
-        x = tok_emb + pos_emb
+        x = x.to(self.load_dtype)
 
-        for j, block_cluster in enumerate(self.attention_blocks):
-            last_x = x.clone()
-
-            skip_interval = self.model_arch["block"][j]["skip_layers"]
-            for i, block in enumerate(block_cluster):
-                x = block(x)
-
-                # Make a skip connection every n blocks
-                if skip_interval != -1 and (i + 1) % skip_interval == 0 and x.shape[-1] == last_x.shape[-1]:
-                    x = self.layer_norm(x + last_x)
-                    last_x = x.clone()
+        for block in self.attention_blocks:
+            x = block(x)
 
         x = self.layer_norm(x)
 
@@ -330,7 +344,8 @@ class TransformerNet(nn.Module):
             if end_token != -1 and idx_next == end_token:
                 print("End token hit, stopping...")
                 break
-
+        
+        self.train()
         return idx
 
     def get_model_params(self):
@@ -358,7 +373,7 @@ class TransformerNet(nn.Module):
 
     @torch.no_grad()
     def estimate_loss(self):
-        eval_iterations = 50
+        eval_iterations = 10
         self.eval()
 
         losses = torch.zeros(eval_iterations)
@@ -378,16 +393,10 @@ class TransformerNet(nn.Module):
         block_arch = self.model_arch["block"]
 
         input_embedding_dim = embedding_arch["embed_dim"]
-        input_block_embd = block_arch[0]["embed_dim"]
+        input_block_embd = block_arch["embed_dim"]
 
         if input_embedding_dim != input_block_embd:
             return False
-
-        for arch in block_arch:
-            if arch["num_rep"] % arch["skip_layers"] != 0:
-                return False
-            if arch["embed_dim"] % arch["num_heads"] != 0:
-                return False
 
         return True
 
@@ -406,6 +415,8 @@ class Generator:
         self.temperature = temperature
 
     def format_output(self, tokenized_text):
+        self.model.train()
+
         return self.tokenizer.Decode(tokenized_text[0].tolist()).replace("<s>", "").replace("</s>", " \n").replace('<n>', '\n')
 
     def random_sample(self, starting_text, max_new_tokens, end_token=None):
@@ -450,7 +461,7 @@ class Generator:
             if end_token != -1 and sorted_idx[0, idx_next_pos[0, 0]] == end_token:
                 print("End token hit, stopping...")
                 break
-
+        
         return self.format_output(starting_text)
 
     def beam_search(self, starting_text, max_new_tokens, k=2, end_token=None):
@@ -485,6 +496,8 @@ class Generator:
         return self.format_output(best_seq)
 
     def generate(self, starting_text, max_new_tokens, end_token=None, mode=0):
+        self.model.eval()
+
         with torch.no_grad():
             if mode == 0:
                 return self.top_p(starting_text, max_new_tokens, end_token)

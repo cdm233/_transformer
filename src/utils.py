@@ -16,12 +16,6 @@ import torch.nn.functional as F
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-class CodeDataLoader:
-    def __init__(self) -> None:
-        # self.dataset = load_dataset("theblackcat102/evol-codealpaca-v1", "en-US", split="train")
-        pass
-
-
 class BaseDataLoader:
     def __init__(self, data_segments=-1, starting_segment=0):
         super(BaseDataLoader, self).__init__()
@@ -370,7 +364,6 @@ class StreamDataLoader:
         self.starting_token = 1
         self.ending_token = 2
 
-
     def get_batch(self, batch_size, block_size, train=True, increment=0.75):
         if train:
             data = self.train_data
@@ -389,9 +382,6 @@ class StreamDataLoader:
         for temp_batch_id in range(batch_size - 1):
             cur_start_id = (temp_batch_id + 1) * int(block_size * increment) + start_idx
             if cur_start_id > len(data):
-                print("[Dataloader]: Stream in the next file")
-                print(f"[Dataloader]: Current stream status: train file id: {self.cur_train_file_id}, val file id: {self.cur_valid_file_id}")
-
                 if train:
                     self.cur_train_file_id += 1
                     self.cur_train_batch_id = 0
@@ -410,15 +400,18 @@ class StreamDataLoader:
                     
                     with open(f"./data/tokenized/val/{self.valid_files[self.cur_valid_file_id]}", "rb") as f:
                         self.val_data = pickle.load(f)
-                
+
+                print(f"\n[Dataloader]: Stream in the next file. Next file: {self.train_files[self.cur_train_file_id]}, {self.valid_files[self.cur_valid_file_id]}")
+                print(f"[Dataloader]: Current file stream status: train file id: {self.cur_train_file_id}/{len(self.train_files)}, val file id: {self.cur_valid_file_id}/{len(self.valid_files)}")
+
                 break
 
             idxs += [cur_start_id]
 
         if train:
-            self.cur_train_batch_id += batch_size * 1
+            self.cur_train_batch_id += batch_size
         else:
-            self.cur_valid_batch_id += batch_size * 1
+            self.cur_valid_batch_id += batch_size
 
         idxs = torch.Tensor(idxs).to(torch.int)
 
@@ -435,7 +428,7 @@ class StreamDataLoader:
         inputs = torch.stack([pad_tensor(data[i:i + block_size]) for i in idxs])
         targets = torch.stack([pad_tensor(data[i + 1:i + block_size + 1]) for i in idxs])
 
-        return inputs.to(device).long(), targets.to(device).long() 
+        return inputs.to(device).long(), targets.to(device).long()
 
 
 def convert_to_datetime(time_str):

@@ -1,0 +1,30 @@
+{
+	"training": {
+		"total_epoch": 1000,
+		"manual_seed": -1,
+		"lr": 3e-5,
+		"batch_size": 5,
+		"weight_decay": 1e-2,
+		"split_percent": 0.95,
+		"gradient_acc": 5
+	},
+	"model": {
+		"vocab_size": 10240,
+		"block_size": 1024,
+		"model_arch": {
+			"embedding": {
+				"embed_dim": 1476
+			},
+			"lm_head": [],
+			"block": {
+				"num_heads": 12,
+				"embed_dim": 1476,
+				"num_rep": 20,
+				"out_embed_dim": 1476
+			}
+		},
+		"dropout_rate": 0.1,
+		"model_version": 0.4,
+		"feed_forward_multiplier": 4
+	}
+}

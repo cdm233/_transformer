@@ -8,7 +8,7 @@ from src.utils import *
 from initialize import ini
 from src.model import Generator
 
-model, dataloader = load_local_model("0.28", "stage_best_train")
+model, dataloader = load_local_model("0.29", "stage_best_train")
 
 start_token = dataloader.starting_token
 end_token = dataloader.ending_token
