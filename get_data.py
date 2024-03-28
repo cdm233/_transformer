@@ -60,22 +60,33 @@ def process_textbook2():
             file_id += 1
         break
 
+
+def process_cnndailymail():
+    dataset = load_dataset("cnn_dailymail", trust_remote_code=True, split="train")
+
+
+
 def get_data():
     dataset_list = [
         ["nampdn-ai/tiny-textbooks", "textbook"],
         ["Locutusque/UltraTextbooks", "text"],
-        ["code_search_net", "python", "whole_func_string"],
+        ["code_search_net", "all", "whole_func_string"],
         ["bookcorpus", "text"],
         ["allenai/c4", "en", "text"],
         ["oscar", "unshuffled_deduplicated_en", "text"],
+        ["Skylion007/openwebtext", "text"],
+        ["togethercomputer/RedPajama-Data-1T-Sample", "text"],
+        ["codeparrot/github-code-clean", "all-all", "code"],
     ]
 
-    process_web_text()
-    process_textbook2()
+    # process_textbook2()
 
     for dataset_config in dataset_list:
         print('loading', dataset_config)
         dataset = load_dataset(*dataset_config[:-1], trust_remote_code=True, split="train")[dataset_config[-1]]
+
+        print("Loaded!\n")
+        break
 
         file_id = 0
         max_lines_per_file = 2_000
@@ -211,5 +222,5 @@ def test_tokenization():
 if __name__ == "__main__":
     clean_up()
     get_data()
-    train_tokenizer()
-    tokenize_data()
+    # train_tokenizer()
+    # tokenize_data()
