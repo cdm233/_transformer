@@ -20,12 +20,14 @@ def auto_dataset_downloader(name, base_url):
         target_file_url = f"{'/'.join(base_url.split('/')[:-1])}/{file_id:04d}.parquet"
         print("Trying to download", target_file_url)
 
-        if requests.head(target_file_url).status_code != 404:
+        status_code = requests.head(target_file_url).status_code
+        
+        if status_code < 400:
             print("File exists")
             os.system(f'wget -P ./data/{name} {target_file_url}')
             file_id += 1
         else:
-            print("File doesn't exist, stopping...")
+            print(f"There is an error when downloading file: {status_code}, stopping...")
             break
 
 
@@ -62,6 +64,8 @@ def train_tokenizer():
         bos_id=1, # the others are optional, set to -1 to turn off
         eos_id=2,
         pad_id=-1,
+        bos=True,  # Add <s> token
+        eos=True,  # Add </s> token
         # systems
         num_threads=os.cpu_count(), # use ~all system resources
     )
@@ -314,20 +318,102 @@ def process_text_books():
             file_id += 1
 
 
+def process_generic_data(dir_name):
+    max_lines_per_file = 4_000
+
+    file_id = 0
+
+    for file_name in os.listdir(f"./data/{dir_name}"):
+        data = load_dataset('parquet', data_files=f'./data/{dir_name}/{file_name}', trust_remote_code=True)["train"]["text"]
+
+        rearranged = [data[i:i + max_lines_per_file] for i in range(0, len(data), max_lines_per_file)]
+
+        for line_cluster in tqdm(rearranged, desc=f"Processing {file_name}", unit="cluster"):
+            result_file_path = f"./data/{dir_name}_{file_id:04d}_plain.txt"
+
+            with open(result_file_path, "w+") as f:
+                file_total[dir_name] += 1
+
+                for line in line_cluster:
+                    f.write(f'<s>{line}</s>\n')
+
+            file_id += 1
+
+
+def process_all_generic_data(dir_list):
+    for dir_name in os.listdir('./data'):
+        if 'tokenized' in dir_name:
+            continue
+
+        if dir_name not in dir_list:
+            continue
+        
+        if os.path.isdir(f"./data/{dir_name}"):
+            print(dir_name)
+            try:
+                process_generic_data(dir_name)
+            except:
+                print(f"Failed process {dir_name}")
+
+
 def preprocessing():
+    if not os.path.exists('./data'):
+        os.mkdir('./data')
+    
     # process_oscar()
-    # process_text_books()
+    process_all_generic_data(["tinytextbook", "oscar"])
+    process_text_books()
     # process_c4()
     # process_code_corpus()
     # process_book_corpus()
-    # process_web_text()
+    process_web_text()
     # train_tokenizer()
     tokenize_data()
 
-    # clean_up()
+    clean_up()
+
+
+def download_data():
+    # auto_dataset_downloader('oscar',              r'https://huggingface.co/datasets/oscar/resolve/refs%2Fconvert%2Fparquet/unshuffled_deduplicated_en/partial-train/0000.parquet')
+    # auto_dataset_downloader('tinytextbook',       r'https://huggingface.co/datasets/nampdn-ai/tiny-textbooks/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet')
+    # auto_dataset_downloader('textbooks2',         r'https://huggingface.co/datasets/Locutusque/UltraTextbooks-2.0/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet')
+    # auto_dataset_downloader('code_search_net',    r'https://huggingface.co/datasets/code_search_net/resolve/refs%2Fconvert%2Fparquet/python/train/0000.parquet')
+    # auto_dataset_downloader('bookcorpus',         r'https://huggingface.co/datasets/bookcorpus/resolve/refs%2Fconvert%2Fparquet/plain_text/train/0000.parquet')
+    # auto_dataset_downloader('textbooks',          r'https://huggingface.co/datasets/Locutusque/UltraTextbooks/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet')
+    # auto_dataset_downloader('c4',                 r'https://huggingface.co/datasets/allenai/c4/resolve/refs%2Fconvert%2Fparquet/en/partial-train/0000.parquet')
+
+    # auto_dataset_downloader('webtext', r'https://huggingface.co/datasets/oscar/resolve/refs%2Fconvert%2Fparquet/unshuffled_deduplicated_en/partial-train/0000.parquet')
+
+    # /oscar
+    # /nampdn-ai/tiny-textbooks
+    # /Locutusque/UltraTextbooks
+    # /code_search_net
+    # /bookcorpus
+    # /Locutusque/UltraTextbooks
+    # /allenai/c4
+    pass
+
+
+def test_loading():
+    from datasets import load_dataset
+    dataset = load_dataset('nampdn-ai/tiny-textbooks')["train"]["textbook"]
+
+    max_lines_per_file = 4_000
+
+    rearranged = [dataset[i:i + max_lines_per_file] for i in range(0, len(dataset), max_lines_per_file)]
+
+    for line_cluster in rearranged:
+        for line in line_cluster:
+            print(line)
+            break
+        break
 
 
 if __name__ == "__main__":
     file_total = defaultdict(lambda: 0)
-    preprocessing()
-    # auto_dataset_downloader('oscar', r'https://huggingface.co/datasets/oscar/resolve/refs%2Fconvert%2Fparquet/unshuffled_deduplicated_en/partial-train/0000.parquet')
+    # test_loading()
+    download_data()
+    # process_all_generic_data()
+    # preprocessing()
+    # clean_up()
+    tokenize_data()

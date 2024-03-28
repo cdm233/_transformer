@@ -149,10 +149,10 @@ if __name__ == "__main__":
     if training_config["manual_seed"] != -1:
         torch.manual_seed(training_config["manual_seed"])
 
-    dataloader = StreamDataLoader(train_start_file_id=1006, valid_start_file_id=26)
+    dataloader = StreamDataLoader(train_start_file_id=1198, valid_start_file_id=31)
     model = ini(dataloader)
 
-    generator = Generator(model, model.model_param["block_size"], dataloader.tokenizer, temperature=1, k=1000, p=0.5)
+    generator = Generator(model, model.model_param["block_size"], dataloader.tokenizer, temperature=0.5, k=1000, p=0.5)
 
     try:
         model.load_model("stage_best_train")
